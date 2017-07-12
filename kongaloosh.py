@@ -23,6 +23,7 @@ import ConfigParser
 import re
 import requests
 from pysrc.file_management.markdown_album_pre_process import move, run
+from PIL import Image, ExifTags
 
 jinja_env = Environment(extensions=['jinja2.ext.with_'])
 
@@ -378,15 +379,24 @@ def mobile_upload():
 
         file_path = "/mnt/volume-nyc1-01/images/temp/"  # todo: factor this out so that it's generalized
         app.logger.info("uploading at" + file_path)
-	app.logger.info(request.files)
-	app.logger.info(request.files.getlist('files[]'))
-	for uploaded_file in request.files.getlist('files[]'):
+        app.logger.info(request.files)
+        app.logger.info(request.files.getlist('files[]'))
+        for uploaded_file in request.files.getlist('files[]'):
             app.logger.info("file " + uploaded_file.filename)
-            uploaded_file.save(
-                file_path + "{0}".format(
-                    uploaded_file.filename
-                )
-            )
+            file_loc = file_path + "{0}".format(uploaded_file.filename)
+            image = Image.open(uploaded_file)
+            for orientation in ExifTags.TAGS.keys():
+                if ExifTags.TAGS[orientation] == 'Orientation':
+                    break
+            exif = dict(image._getexif().items())
+
+            if exif[orientation] == 3:
+                image = image.rotate(180, expand=True)
+            elif exif[orientation] == 6:
+                image = image.rotate(270, expand=True)
+            elif exif[orientation] == 8:
+                image = image.rotate(90, expand=True)
+            image.save(file_loc)
         return redirect('/')
     else:
         return redirect('/404')
@@ -564,11 +574,12 @@ def post_from_request(request):
         'syndication': None,
         'photo': None
     }
-    for title in request.form:
-        data[title] = request.form[title]
 
     for title in request.files:
         data[title] = request.files[title].read()
+
+    for title in request.form:
+        data[title] = request.form[title]
 
     for key in data:
         if data[key] == "None" or data[key] == '':
@@ -606,7 +617,7 @@ def edit(year, month, day, name):
 
             location = "{year}/{month}/{day}/{name}".format(year=year, month=month, day=day, name=name)
 
-            data['content'] = run(data['content'], date=data['published'])
+            # data['content'] = run(data['content'], date=data['published'])
 
             if request.form.get('twitter'):
                 t = Timer(30, bridgy_twitter, ['/e/' + location])
@@ -633,12 +644,12 @@ def profile(year, month, day, name):
 
     entry = file_parser_json(file_name + ".json")
 
-    if os.path.exists(file_name + ".jpg"):
-        entry['photo'] = file_name + ".jpg"  # get the actual file
-    if os.path.exists(file_name + ".mp4"):
-        entry['video'] = file_name + ".mp4"  # get the actual file
-    if os.path.exists(file_name + ".mp3"):
-        entry['audio'] = file_name + ".mp3"  # get the actual file
+    # if os.path.exists(file_name + ".jpg"):
+    #     entry['photo'] = file_name + ".jpg"  # get the actual file
+    # if os.path.exists(file_name + ".mp4"):
+    #     entry['video'] = file_name + ".mp4"  # get the actual file
+    # if os.path.exists(file_name + ".mp3"):
+    #     entry['audio'] = file_name + ".mp3"  # get the actual file
 
     mentions = get_mentions('http://' + DOMAIN_NAME + '/e/{year}/{month}/{day}/{name}'.
                             format(year=year, month=month, day=day, name=name))
@@ -792,23 +803,25 @@ def handle_micropub():
             app.logger.info('acccess [%s]' % request)
             if checkAccessToken(access_token, request.form.get("client_id.data")):  # if the token is valid ...
                 app.logger.info('authed')
+                app.logger.info(request.data)
+                app.logger.info(request.files)
                 data = {
-        'h': None,
-        'title': None,
-        'summary': None,
-        'content': None,
-        'published': None,
-        'updated': None,
-        'category': None,
-        'slug': None,
-        'location': None,
-        'location_name': None,
-        'location_id': None,
-        'in_reply_to': None,
-        'repost-of': None,
-        'syndication': None,
-        'photo': None
-    }
+                    'h': None,
+                    'title': None,
+                    'summary': None,
+                    'content': None,
+                    'published': None,
+                    'updated': None,
+                    'category': None,
+                    'slug': None,
+                    'location': None,
+                    'location_name': None,
+                    'location_id': None,
+                    'in_reply_to': None,
+                    'repost-of': None,
+                    'syndication': None,
+                    'photo': None
+                }
 
                 for key in (
                         'name', 'summary', 'content', 'published', 'updated', 'category',
@@ -817,6 +830,10 @@ def handle_micropub():
                         data[key] = request.form.get(key)
                     except KeyError:
                         pass
+
+                if type(data['category']) == unicode:
+                    data['category'] = [i.strip() for i in data['category'].lower().split(",")]
+
 
                 if not data['published']:  # if we don't have a timestamp, make one now
                     data['published'] = datetime.today()
@@ -827,7 +844,7 @@ def handle_micropub():
                 for key, name in [('photo', 'image'), ('audio', 'audio'), ('video', 'video')]:
                     try:
                         if request.files.get(key):
-                            img = request.files.get(key).read()
+                            img = request.files.get(key)
                             data[key] = img
                             data['category'].append(name)  # we've added an image, so append it
                     except KeyError:
